@@ -32,7 +32,7 @@ services:
     image: postgres:15-alpine
     restart: always
     environment:
-      POSTGRES_USER: adib
+      POSTGRES_USER: adibGhannam
       POSTGRES_PASSWORD: supersecret123
       POSTGRES_DB: esp32_data
     ports:
