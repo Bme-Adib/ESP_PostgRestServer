@@ -8,10 +8,10 @@
 // ====================================================================
 // ⚙️ 1. NETWORK & API CONFIGURATION
 // ====================================================================
-const char* WIFI_SSID = "Herculife5G";
-const char* WIFI_PASSWORD = "zaq1ZAQ!";
+const char* WIFI_SSID = "SSID";
+const char* WIFI_PASSWORD = "PASSWORD";
 
-const String BASE_URL = "https://esppostgrest.thebiomednest.com";
+const String BASE_URL = "https://esppostgrest.tbn.com";
 const String BOARD_ID = "esp32_core_1";
 
 // ====================================================================
