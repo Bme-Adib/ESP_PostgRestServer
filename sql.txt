@@ -1,0 +1,32 @@
+-- 1. Register Edge Devices
+CREATE TABLE boards (
+  id VARCHAR(50) PRIMARY KEY,
+  location_desc VARCHAR(100)
+);
+
+-- 2. Register Actuators (Outputs)
+CREATE TABLE actuators (
+  id SERIAL PRIMARY KEY,
+  board_id VARCHAR(50) REFERENCES boards(id),
+  component_name VARCHAR(50),  
+  component_type VARCHAR(20),  
+  target_state VARCHAR(50)     
+);
+
+-- 3. Actuation Audit Log
+CREATE TABLE action_history (
+  id SERIAL PRIMARY KEY,
+  board_id VARCHAR(50),
+  component_name VARCHAR(50),
+  state_applied VARCHAR(50),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 4. Sensor Audit Log
+CREATE TABLE sensor_history (
+  id SERIAL PRIMARY KEY,
+  board_id VARCHAR(50),
+  sensor_name VARCHAR(50),
+  reading NUMERIC,             
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
