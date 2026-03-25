@@ -30,3 +30,15 @@ CREATE TABLE sensor_history (
   reading NUMERIC,             
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 1. Register the ESP32 Board First (This must exist before adding actuators)
+INSERT INTO boards (id, location_desc) 
+VALUES ('esp32_core_1', 'Main Test Bench');
+
+-- 2. Register the Built-in NeoPixel
+INSERT INTO actuators (board_id, component_name, component_type, target_state) 
+VALUES ('esp32_core_1', 'builtinLED', 'neopixel', 'false');
+
+-- 3. Register the Pump Relay
+INSERT INTO actuators (board_id, component_name, component_type, target_state) 
+VALUES ('esp32_core_1', 'pump_relay', 'digital', 'false');
