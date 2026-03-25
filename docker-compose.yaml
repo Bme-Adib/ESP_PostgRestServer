@@ -4,9 +4,9 @@ services:
     image: postgres:15-alpine
     restart: always
     environment:
-      POSTGRES_USER: adibGhannam
-      POSTGRES_PASSWORD: supersecret123
-      POSTGRES_DB: esp32_data
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
     ports:
       - "5432:5432"
     volumes:
@@ -18,21 +18,23 @@ services:
     ports:
       - "3166:3000"
     environment:
-      PGRST_DB_URI: postgres://adib:supersecret123@db:5432/esp32_data
+      # Using the libpq format. Notice the single quotes around the password variable!
+      PGRST_DB_URI: host=db port=5432 dbname=${DB_NAME} user=${DB_USER} password='${DB_PASSWORD}'
       PGRST_DB_SCHEMA: public
-      PGRST_DB_ANON_ROLE: adib 
+      PGRST_DB_ANON_ROLE: ${DB_USER} 
     depends_on:
       - db
 
-  adminer:
-    image: adminer:latest
+  cloudbeaver:
+    image: dbeaver/cloudbeaver:latest
     restart: always
     ports:
-      - "3165:8080"
-    environment:
-      ADMINER_DEFAULT_SERVER: db
+      - "3165:8978" 
+    volumes:
+      - cloudbeaver_data:/opt/cloudbeaver/workspace
     depends_on:
       - db
 
 volumes:
   pgdata:
+  cloudbeaver_data:
