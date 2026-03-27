@@ -1,0 +1,465 @@
+/*
+ * ===================================================================================
+ * 🖥️ HARDWARE CONNECTION GUIDE: 1.28" Round TFT SPI Screen (GC9A01) to ESP32
+ * ===================================================================================
+ * * LIBRARY REQUIRED: 
+ * TFT_eSPI by Bodmer (Install via Arduino Library Manager)
+ * * PHYSICAL WIRING:
+ * -----------------------------------------------------------------------------------
+ * SCREEN PIN    ESP32 PIN      NOTES
+ * -----------------------------------------------------------------------------------
+ * VCC      ->   3.3V           Do not use 5V.
+ * GND      ->   GND
+ * SCL      ->   GPIO 18        SPI Clock
+ * SDA      ->   GPIO 10        SPI MOSI 
+ * RES      ->   GPIO 4         Reset
+ * DC / A0  ->   GPIO 3         Data/Command
+ * CS       ->   GPIO 5         Chip Select
+ * LED      ->   3.3V           Backlight (Must be connected or screen stays pitch black)
+ * * * LIBRARY CONFIGURATION (User_Setup.h):
+ * -----------------------------------------------------------------------------------
+ * You MUST edit the `User_Setup.h` file inside the TFT_eSPI library folder.
+ * Path: [Your Sketchbook Folder]/libraries/TFT_eSPI/User_Setup.h
+ * * 1. Set the Driver:
+ * #define GC9A01_DRIVER      // Uncomment this
+ * //#define ILI9341_DRIVER   // Comment out the default
+ * * 2. Define the Custom Pins:
+ * #define TFT_MOSI 10
+ * #define TFT_SCLK 18
+ * #define TFT_CS    5
+ * #define TFT_DC    3
+ * #define TFT_RST   4
+ * * 3. Fix the Colors (Required for round displays):
+ * #define TFT_INVERSION_ON   // Uncomment this line
+ * ===================================================================================
+ */
+
+
+/* user_setup.h File v
+
+#define USER_SETUP_INFO "User_Setup"
+
+// ====================================================================
+// Section 1. Display Driver
+// ====================================================================
+#define GC9A01_DRIVER
+#define TFT_INVERSION_ON
+
+// ====================================================================
+// Section 2. ESP32 Pin Mapping
+// ====================================================================
+#define TFT_MOSI 10  // SDA
+#define TFT_SCLK 18  // SCK
+#define TFT_CS    5  // Chip Select
+#define TFT_DC    3  // Data/Command (A0)
+#define TFT_RST   4  // Reset
+
+// ====================================================================
+// Section 3. Fonts
+// ====================================================================
+#define LOAD_GLCD   // Font 1. Original Adafruit 8 pixel font
+#define LOAD_FONT2  // Font 2. Small 16 pixel high font
+#define LOAD_FONT4  // Font 4. Medium 26 pixel high font
+#define LOAD_FONT6  // Font 6. Large 48 pixel font
+#define LOAD_FONT7  // Font 7. 7 segment 48 pixel font
+#define LOAD_FONT8  // Font 8. Large 75 pixel font
+#define LOAD_GFXFF  // FreeFonts
+#define SMOOTH_FONT
+
+// ====================================================================
+// Section 4. SPI Frequencies
+// ====================================================================
+#define SPI_FREQUENCY  27000000
+#define SPI_READ_FREQUENCY  20000000
+#define SPI_TOUCH_FREQUENCY  2500000
+
+
+*/
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <ArduinoJson.h>
+#include <Adafruit_NeoPixel.h>
+#include <vector>
+#include <SPI.h>
+#include <TFT_eSPI.h> 
+
+// OTA Libraries
+#include <ESPmDNS.h>
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
+
+// ====================================================================
+// ⚙️ 1. NETWORK & API CONFIGURATION
+// ====================================================================
+const char* WIFI_SSID = "Herculife5G";
+const char* WIFI_PASSWORD = "zaq1ZAQ!";
+
+const String BASE_URL = "https://esppostgrest.thebiomednest.com";
+const String BOARD_ID = "esp32_core_1";
+
+// ====================================================================
+// ⚙️ 2. HARDWARE REGISTRY
+// ====================================================================
+
+// --- Screen Setup ---
+TFT_eSPI tft = TFT_eSPI(); 
+
+// --- Built-in NeoPixel Setup ---
+#define NEOPIXEL_PIN 48
+#define NUMPIXELS 1
+Adafruit_NeoPixel rgbLed(NUMPIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+
+// --- Universal Actuators (Outputs) ---
+struct Actuator {
+  String name;  
+  String type;  
+  int pin;
+  String currentState; 
+};
+
+std::vector<Actuator> actuators = {
+  { "builtinLED", "neopixel", NEOPIXEL_PIN, "false" },  // Index 0
+  // { "pump_relay", "digital", 21, "false" }               // Index 1
+};
+
+// --- Universal Sensors (Inputs) ---
+struct Sensor {
+  String name; 
+  int pin;
+  int threshold;  
+  int lastReading;
+};
+
+std::vector<Sensor> sensors = {
+  // {"murata_ma40s4r", 34, 50, -999}  
+};
+
+// ====================================================================
+// 🌐 GLOBAL NETWORK OBJECTS & FUNCTION DECLARATIONS
+// ====================================================================
+WiFiClientSecure secureClient;
+
+// Declaring functions here fixes the "not declared in this scope" error
+void connectToWiFi();
+String fetchFromDatabase(String endpoint);
+void postToDatabase(String endpoint, String payload);
+void patchDatabase(String endpoint, String payload);
+void updateScreen(uint16_t bgColor, String text, String subText = "");
+void flashRED(int index);
+void flashGREEN(int index);
+void flashBLUE(int index);
+
+// ====================================================================
+// 🚀 MAIN SETUP  
+// ====================================================================
+void setup() {
+  Serial.begin(115200);
+
+  // --- ADD THIS DIAGNOSTIC TEST ---
+  Serial.println("\n--- TFT PIN DIAGNOSTIC ---");
+  Serial.printf("MOSI (SDA): %d\n", TFT_MOSI);
+  Serial.printf("SCLK (SCK): %d\n", TFT_SCLK);
+  Serial.printf("CS: %d\n", TFT_CS);
+  Serial.printf("DC (A0): %d\n", TFT_DC);
+  Serial.printf("RST: %d\n", TFT_RST);
+  Serial.println("--------------------------\n");
+
+  // 1. Initialize Screen
+  tft.init();
+  tft.setRotation(0);
+  updateScreen(TFT_BLACK, "CONNECTING...", "WiFi");
+
+  // 2. Initialize Hardware
+  rgbLed.begin();
+  rgbLed.clear();
+  rgbLed.show();
+
+  for (int i = 0; i < actuators.size(); i++) {
+    if (actuators[i].type == "digital") {
+      pinMode(actuators[i].pin, OUTPUT);
+      digitalWrite(actuators[i].pin, LOW);
+    }
+  }
+
+  for (int i = 0; i < sensors.size(); i++) {
+    pinMode(sensors[i].pin, INPUT);
+  }
+
+  // 3. Connect to Network
+  connectToWiFi();
+  secureClient.setInsecure(); 
+  updateScreen(TFT_BLACK, "READY", BOARD_ID);
+
+  // 4. Initialize OTA (Over-The-Air)
+  ArduinoOTA.setHostname(BOARD_ID.c_str());
+  ArduinoOTA.onStart([]() { Serial.println("Start OTA"); updateScreen(TFT_BLUE, "UPDATING", "OTA Sync"); });
+  ArduinoOTA.onEnd([]() { Serial.println("\nEnd OTA"); updateScreen(TFT_BLACK, "REBOOTING..."); });
+  ArduinoOTA.setPassword("adibGhannam");
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.begin();
+}
+
+// ====================================================================
+// 🔄 MAIN LOOP
+// ====================================================================
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    updateScreen(TFT_RED, "NO WIFI", "Reconnecting...");
+    connectToWiFi(); 
+    return;
+  }
+
+  // Keep background OTA connection alive
+  ArduinoOTA.handle(); 
+
+  // ---------------------------------------------------------
+  // PART A: PROCESS ACTUATORS (Cloud -> ESP32)
+  // ---------------------------------------------------------
+  String getUrl = "/actuators?board_id=eq." + BOARD_ID;
+  String jsonResponse = fetchFromDatabase(getUrl);
+
+  if (jsonResponse != "") {
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, jsonResponse);
+
+    if (!error) {
+      for (JsonObject dbItem : doc.as<JsonArray>()) {
+        String dbName = dbItem["component_name"].as<String>();
+        String targetState = dbItem["target_state"].as<String>();
+
+        for (int i = 0; i < actuators.size(); i++) {
+          if (actuators[i].name == dbName) {
+
+            // STATE CHANGE DETECTED
+            if (actuators[i].currentState != targetState) {
+              Serial.printf("\n[ACTION] %s changing to: %s\n", dbName.c_str(), targetState.c_str());
+
+              // --- Hardware Control Logic ---
+              if (actuators[i].type == "neopixel") {
+                if (targetState == "false") {
+                  rgbLed.clear();
+                  updateScreen(TFT_BLACK, "Turned Off");
+                } 
+                else if (targetState == "flash_red") {
+                  flashRED(i);
+                } 
+                else if (targetState == "flash_green") {
+                  flashGREEN(i);
+                } 
+                else if (targetState == "flash_blue") {
+                  flashBLUE(i);
+                } 
+                else {
+                  int r = 0, g = 0, b = 0, br = 0;
+                  int matchCount = sscanf(targetState.c_str(), "(%d,%d,%d,%d)", &r, &g, &b, &br);
+
+                  if (matchCount == 4) {
+                    int hardwareBrightness = map(br, 0, 100, 0, 255);
+                    rgbLed.setBrightness(hardwareBrightness);
+                    rgbLed.setPixelColor(0, rgbLed.Color(r, g, b));
+                    uint16_t screenColor = tft.color565(r, g, b);
+                    String rgbLabel = "R:" + String(r) + " G:" + String(g) + " B:" + String(b);
+                    updateScreen(screenColor, "ACTIVE", rgbLabel);
+                  } else if (matchCount == 3) {
+                    rgbLed.setBrightness(255);
+                    rgbLed.setPixelColor(0, rgbLed.Color(r, g, b));
+                    uint16_t screenColor = tft.color565(r, g, b);
+                    String rgbLabel = "R:" + String(r) + " G:" + String(g) + " B:" + String(b);
+                    updateScreen(screenColor, "ACTIVE", rgbLabel);
+                  } else {
+                    Serial.println("Error: Invalid color format from database.");
+                  }
+                }
+                rgbLed.show(); 
+              }
+              else if (actuators[i].type == "digital") {
+                digitalWrite(actuators[i].pin, targetState == "true" ? HIGH : LOW);
+              }
+
+              // --- Memory & Audit Logging ---
+              actuators[i].currentState = targetState; 
+
+              String logPayload = "{\"board_id\": \"" + BOARD_ID + "\", \"component_name\": \"" + dbName + "\", \"state_applied\": \"" + targetState + "\"}";
+              postToDatabase("/action_history", logPayload);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------
+  // PART B: PROCESS SENSORS (ESP32 -> Cloud)
+  // ---------------------------------------------------------
+  for (int i = 0; i < sensors.size(); i++) {
+    int currentReading = analogRead(sensors[i].pin);
+
+    if (abs(currentReading - sensors[i].lastReading) >= sensors[i].threshold) {
+      Serial.printf("\n[SENSOR] %s detected change: %d\n", sensors[i].name.c_str(), currentReading);
+
+      sensors[i].lastReading = currentReading;
+
+      String logPayload = "{\"board_id\": \"" + BOARD_ID + "\", \"sensor_name\": \"" + sensors[i].name + "\", \"reading\": " + String(currentReading) + "}";
+      postToDatabase("/sensor_history", logPayload);
+    }
+  }
+
+  // Sleep for 250ms to prevent API rate limits and watchdog crashes
+  delay(250); 
+}
+
+// ====================================================================
+// 🛠️ HELPER FUNCTIONS (Keeps the main loop clean)
+// ====================================================================
+
+void connectToWiFi() {
+  Serial.print("Connecting to WiFi");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nSuccessfully connected to WiFi!");
+  updateScreen(TFT_BLACK, "READY", BOARD_ID);
+}
+
+String fetchFromDatabase(String endpoint) {
+  HTTPClient http;
+  http.begin(secureClient, BASE_URL + endpoint);
+  http.addHeader("Cache-Control", "no-cache");
+
+  int responseCode = http.GET();
+  String payload = "";
+
+  if (responseCode == 200) {
+    payload = http.getString();
+  } else if (responseCode > 0) {
+    Serial.printf("[HTTP GET] Error: %d\n", responseCode);
+  }
+
+  http.end();
+  return payload;
+}
+
+void postToDatabase(String endpoint, String payload) {
+  HTTPClient http;
+  http.begin(secureClient, BASE_URL + endpoint);
+  http.addHeader("Content-Type", "application/json");
+
+  int responseCode = http.POST(payload);
+
+  if (responseCode == 201) {
+    Serial.println("[HTTP POST] Success - Logged to Database.");
+  } else {
+    Serial.printf("[HTTP POST] Error: %d\n", responseCode);
+  }
+
+  http.end();
+}
+
+void patchDatabase(String endpoint, String payload) {
+  HTTPClient http;
+  http.begin(secureClient, BASE_URL + endpoint);
+  http.addHeader("Content-Type", "application/json");
+
+  int responseCode = http.sendRequest("PATCH", payload);
+
+  if (responseCode >= 200 && responseCode < 300) {
+    Serial.println("[HTTP PATCH] Success - Target state auto-reset.");
+  } else {
+    Serial.printf("[HTTP PATCH] Error: %d\n", responseCode);
+  }
+
+  http.end();
+}
+
+// ====================================================================
+// 🖥️ SCREEN HELPER
+// ====================================================================
+void updateScreen(uint16_t bgColor, String text, String subText) {
+  tft.fillScreen(bgColor);
+  
+  tft.setTextColor(TFT_WHITE); 
+  tft.setTextDatum(MC_DATUM); // Middle Center
+  
+  // Center is 120, 120 for a 240x240 screen
+  tft.drawString(text, 120, 100, 4); 
+  
+  if (subText != "") {
+    tft.setTextSize(1);
+    tft.drawString(subText, 120, 140, 2); 
+  }
+}
+
+// ====================================================================
+// 🚨 FLASHING LOGIC (Synced with Screen)
+// ====================================================================
+void flashRED(int index) {
+  for (int f = 0; f < 3; f++) {
+    rgbLed.setBrightness(255); 
+    rgbLed.setPixelColor(0, rgbLed.Color(255, 0, 0));
+    rgbLed.show();
+    updateScreen(TFT_RED, "FLASHING", "RED");
+    delay(200);
+    
+    rgbLed.clear();
+    rgbLed.show();
+    updateScreen(TFT_BLACK, "FLASHING", "RED");
+    delay(200);
+  }
+  
+  String patchEndpoint = "/actuators?board_id=eq." + String(BOARD_ID) + "&component_name=eq." + actuators[index].name;
+  String patchPayload = "{\"target_state\": \"false\"}";
+  patchDatabase(patchEndpoint, patchPayload);
+  
+  actuators[index].currentState = "false";
+  updateScreen(TFT_BLACK, "Turned Off");
+}
+
+void flashGREEN(int index) {
+  for (int f = 0; f < 3; f++) {
+    rgbLed.setBrightness(255); 
+    rgbLed.setPixelColor(0, rgbLed.Color(0, 255, 0));
+    rgbLed.show();
+    updateScreen(TFT_GREEN, "FLASHING", "GREEN");
+    delay(200);
+    
+    rgbLed.clear();
+    rgbLed.show();
+    updateScreen(TFT_BLACK, "FLASHING", "GREEN");
+    delay(200);
+  }
+  
+  String patchEndpoint = "/actuators?board_id=eq." + String(BOARD_ID) + "&component_name=eq." + actuators[index].name;
+  String patchPayload = "{\"target_state\": \"false\"}";
+  patchDatabase(patchEndpoint, patchPayload);
+  
+  actuators[index].currentState = "false";
+  updateScreen(TFT_BLACK, "Turned Off");
+}
+
+void flashBLUE(int index) {
+  for (int f = 0; f < 3; f++) {
+    rgbLed.setBrightness(255); 
+    rgbLed.setPixelColor(0, rgbLed.Color(0, 0, 255));
+    rgbLed.show();
+    updateScreen(TFT_BLUE, "FLASHING", "BLUE");
+    delay(200);
+    
+    rgbLed.clear();
+    rgbLed.show();
+    updateScreen(TFT_BLACK, "FLASHING", "BLUE");
+    delay(200);
+  }
+  
+  String patchEndpoint = "/actuators?board_id=eq." + String(BOARD_ID) + "&component_name=eq." + actuators[index].name;
+  String patchPayload = "{\"target_state\": \"false\"}";
+  patchDatabase(patchEndpoint, patchPayload);
+  
+  actuators[index].currentState = "false";
+  updateScreen(TFT_BLACK, "Turned Off");
+}
